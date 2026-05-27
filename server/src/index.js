@@ -8,14 +8,11 @@ import { Server } from "socket.io";
 
 const PORT = process.env.PORT || 4000;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 const ROOM_CODE_LENGTH = 4;
 const ROOM_CHARACTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const EMPTY_ROOM_TTL_MS = 1000 * 60 * 60;
-const HUMANIZE_MAX_CHARS = 12000;
-const HUMANIZE_WINDOW_MS = 1000 * 60;
-const HUMANIZE_MAX_REQUESTS = 12;
+const MAX_IMAGES_PER_ROOM = 12;
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDistPath = path.resolve(__dirname, "../../client/dist");
 const USER_COLORS = [
@@ -32,6 +29,7 @@ const USER_COLORS = [
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
+  maxHttpBufferSize: 8 * 1024 * 1024,
   cors: {
     origin: CLIENT_ORIGIN,
     methods: ["GET", "POST"]
@@ -39,10 +37,9 @@ const io = new Server(server, {
 });
 
 const rooms = new Map();
-const humanizeRequests = new Map();
 
 app.use(cors({ origin: CLIENT_ORIGIN }));
-app.use(express.json({ limit: "128kb" }));
+app.use(express.json());
 app.use(express.static(clientDistPath));
 
 app.get("/health", (_req, res) => {
@@ -63,59 +60,6 @@ app.get("/api/network", (_req, res) => {
   });
 });
 
-app.post("/api/humanize", async (req, res) => {
-  const clientKey = req.ip || req.socket.remoteAddress || "unknown";
-
-  if (!canUseHumanizer(clientKey)) {
-    res.status(429).json({
-      ok: false,
-      error: "Too many humanize requests. Wait a minute and try again."
-    });
-    return;
-  }
-
-  const text = String(req.body?.text || "").trim();
-
-  if (!text) {
-    res.status(400).json({
-      ok: false,
-      error: "Add some text before using Humanize."
-    });
-    return;
-  }
-
-  if (text.length > HUMANIZE_MAX_CHARS) {
-    res.status(400).json({
-      ok: false,
-      error: `Humanize supports up to ${HUMANIZE_MAX_CHARS} characters at a time.`
-    });
-    return;
-  }
-
-  if (!GEMINI_API_KEY) {
-    res.status(503).json({
-      ok: false,
-      error: "Gemini API key is not configured on the server."
-    });
-    return;
-  }
-
-  try {
-    const humanizedText = await humanizeWithGemini(text);
-
-    res.json({
-      ok: true,
-      text: humanizedText
-    });
-  } catch (error) {
-    console.error("Humanize failed:", error);
-    res.status(502).json({
-      ok: false,
-      error: "Could not humanize that text right now. Try again in a moment."
-    });
-  }
-});
-
 app.get("*", (_req, res) => {
   res.sendFile(path.join(clientDistPath, "index.html"));
 });
@@ -131,6 +75,7 @@ io.on("connection", (socket) => {
 
     rooms.set(roomCode, {
       note: "",
+      images: [],
       users: new Map(),
       typingUsers: new Set(),
       emptyRoomTimer: null
@@ -142,6 +87,7 @@ io.on("connection", (socket) => {
       ok: true,
       roomCode,
       note: "",
+      images: [],
       currentUser: getRoomUser(roomCode, socket.id),
       users: getRoomUsers(roomCode),
       usersCount: getUsersCount(roomCode)
@@ -168,6 +114,7 @@ io.on("connection", (socket) => {
       ok: true,
       roomCode: normalizedRoomCode,
       note: room.note,
+      images: room.images,
       currentUser: getRoomUser(normalizedRoomCode, socket.id),
       users: getRoomUsers(normalizedRoomCode),
       usersCount: getUsersCount(normalizedRoomCode)
@@ -187,6 +134,84 @@ io.on("connection", (socket) => {
     socket.to(normalizedRoomCode).emit("note-sync", {
       roomCode: normalizedRoomCode,
       note: room.note
+    });
+  });
+
+  socket.on("image-add", ({ roomCode, image }, callback) => {
+    const normalizedRoomCode = normalizeRoomCode(roomCode);
+    const room = rooms.get(normalizedRoomCode);
+
+    if (!room || socket.data.roomCode !== normalizedRoomCode) {
+      callback?.({
+        ok: false,
+        error: "You are not in that room."
+      });
+      return;
+    }
+
+    const cleanImage = sanitizeImage(image, socket.data.user);
+
+    if (!cleanImage) {
+      callback?.({
+        ok: false,
+        error: "That image could not be shared."
+      });
+      return;
+    }
+
+    if (room.images.length >= MAX_IMAGES_PER_ROOM) {
+      callback?.({
+        ok: false,
+        error: `A room can hold up to ${MAX_IMAGES_PER_ROOM} shared photos.`
+      });
+      return;
+    }
+
+    room.images.push(cleanImage);
+
+    io.to(normalizedRoomCode).emit("images-sync", {
+      roomCode: normalizedRoomCode,
+      images: room.images
+    });
+
+    callback?.({
+      ok: true,
+      images: room.images
+    });
+  });
+
+  socket.on("image-remove", ({ roomCode, imageId }, callback) => {
+    const normalizedRoomCode = normalizeRoomCode(roomCode);
+    const room = rooms.get(normalizedRoomCode);
+
+    if (!room || socket.data.roomCode !== normalizedRoomCode) {
+      callback?.({
+        ok: false,
+        error: "You are not in that room."
+      });
+      return;
+    }
+
+    const nextImages = room.images.filter((image) => image.id !== String(imageId || ""));
+
+    if (nextImages.length === room.images.length) {
+      callback?.({
+        ok: false,
+        error: "That photo was already removed."
+      });
+      return;
+    }
+
+    room.images = nextImages;
+
+    io.to(normalizedRoomCode).emit("images-sync", {
+      roomCode: normalizedRoomCode,
+      images: room.images
+    });
+
+    callback?.({
+      ok: true,
+      images: room.images
     });
   });
 
@@ -381,81 +406,32 @@ function pickRoomColor(room) {
   return USER_COLORS[room.users.size % USER_COLORS.length];
 }
 
-function canUseHumanizer(clientKey) {
-  const now = Date.now();
-  const entry = humanizeRequests.get(clientKey);
-
-  if (!entry || now - entry.startedAt > HUMANIZE_WINDOW_MS) {
-    humanizeRequests.set(clientKey, {
-      count: 1,
-      startedAt: now
-    });
-    return true;
+function sanitizeImage(image, user) {
+  if (!image || typeof image.dataUrl !== "string") {
+    return null;
   }
 
-  if (entry.count >= HUMANIZE_MAX_REQUESTS) {
-    return false;
+  const type = String(image.type || "");
+  const name = String(image.name || "Shared photo").trim().slice(0, 80) || "Shared photo";
+  const dataUrl = image.dataUrl;
+
+  if (!type.startsWith("image/") || !dataUrl.startsWith(`data:${type};base64,`)) {
+    return null;
   }
 
-  entry.count += 1;
-  return true;
-}
+  const base64Data = dataUrl.split(",")[1] || "";
+  const approximateBytes = Math.ceil((base64Data.length * 3) / 4);
 
-async function humanizeWithGemini(text) {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              {
-                text: [
-                  "Rewrite the text below so it reads like a real person wrote it, while keeping the exact meaning.",
-                  "Keep every fact, name, number, example, and intent unchanged.",
-                  "Do not add new information. Do not remove important details.",
-                  "Do not make it sound over-polished, generic, motivational, or like a formal essay.",
-                  "Keep a natural human rhythm: some short sentences, some normal sentences, and simple wording.",
-                  "Avoid common AI-style transitions and filler phrases such as 'moreover', 'furthermore', 'in conclusion', 'it is important to note', 'delve', 'leverage', 'robust', 'seamless', and 'unlock'.",
-                  "Preserve the writer's original tone as much as possible. If the text is casual, keep it casual. If it is professional, keep it professional but still natural.",
-                  "Use contractions where they fit, but do not force them into every sentence.",
-                  "Do not use headings, bullet points, markdown, notes, or explanations unless they already exist in the original text.",
-                  "Return only the rewritten text.",
-                  "",
-                  text
-                ].join("\n")
-              }
-            ]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.55,
-          topP: 0.82,
-          maxOutputTokens: 4096
-        }
-      })
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini API error ${response.status}: ${errorText}`);
+  if (approximateBytes > MAX_IMAGE_BYTES) {
+    return null;
   }
 
-  const data = await response.json();
-  const output = data?.candidates?.[0]?.content?.parts
-    ?.map((part) => part.text || "")
-    .join("")
-    .trim();
-
-  if (!output) {
-    throw new Error("Gemini returned an empty response.");
-  }
-
-  return output;
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    name,
+    type,
+    dataUrl,
+    addedBy: user?.name || "Guest",
+    createdAt: new Date().toISOString()
+  };
 }
