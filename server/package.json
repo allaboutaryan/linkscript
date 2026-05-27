@@ -10,8 +10,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "linkpad": "file:..",
     "socket.io": "^4.7.5"
-  },
-  "devDependencies": {}
+  }
 }
-
