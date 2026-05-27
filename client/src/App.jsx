@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { socket } from "./lib/socket.js";
-import { humanizeText } from "./lib/humanizeText.js";
 import HomePage from "./pages/HomePage.jsx";
 import EditorPage from "./pages/EditorPage.jsx";
 
 const INITIAL_STATUS = socket.connected ? "connected" : "disconnected";
 const TYPING_STOP_DELAY = 1200;
 const REQUEST_TIMEOUT = 8000;
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
 export default function App() {
   const [view, setView] = useState("home");
   const [roomCode, setRoomCode] = useState("");
   const [note, setNote] = useState("");
+  const [images, setImages] = useState([]);
   const [usersCount, setUsersCount] = useState(0);
   const [users, setUsers] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -19,7 +20,6 @@ export default function App() {
   const [connectionStatus, setConnectionStatus] = useState(INITIAL_STATUS);
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
-  const [isHumanizing, setIsHumanizing] = useState(false);
   const latestRoomCode = useRef("");
   const currentUserRef = useRef(null);
   const displayNameRef = useRef("");
@@ -45,6 +45,7 @@ export default function App() {
           currentUserRef.current = response.currentUser;
           setCurrentUser(response.currentUser);
           setNote(response.note);
+          setImages(response.images || []);
           setUsers(response.users || []);
           setUsersCount(response.usersCount);
         }
@@ -82,11 +83,20 @@ export default function App() {
       );
     }
 
+    function handleImagesSync(payload) {
+      if (payload.roomCode !== latestRoomCode.current) {
+        return;
+      }
+
+      setImages(payload.images || []);
+    }
+
     socket.on("connect", handleConnect);
     socket.on("disconnect", handleDisconnect);
     socket.on("note-sync", handleNoteSync);
     socket.on("room-users", handleRoomUsers);
     socket.on("typing-users", handleTypingUsers);
+    socket.on("images-sync", handleImagesSync);
 
     return () => {
       window.clearTimeout(typingTimeoutRef.current);
@@ -95,6 +105,7 @@ export default function App() {
       socket.off("note-sync", handleNoteSync);
       socket.off("room-users", handleRoomUsers);
       socket.off("typing-users", handleTypingUsers);
+      socket.off("images-sync", handleImagesSync);
     };
   }, []);
 
@@ -126,6 +137,7 @@ export default function App() {
       currentUserRef.current = response.currentUser;
       setRoomCode(response.roomCode);
       setNote(response.note);
+      setImages(response.images || []);
       setCurrentUser(response.currentUser);
       setUsers(response.users || []);
       setUsersCount(response.usersCount);
@@ -171,6 +183,7 @@ export default function App() {
         currentUserRef.current = response.currentUser;
         setRoomCode(response.roomCode);
         setNote(response.note);
+        setImages(response.images || []);
         setCurrentUser(response.currentUser);
         setUsers(response.users || []);
         setUsersCount(response.usersCount);
@@ -208,48 +221,76 @@ export default function App() {
     [roomCode]
   );
 
-  const humanizeNote = useCallback(async () => {
-    const textToHumanize = note.trim();
+  const addImages = useCallback(
+    async (files) => {
+      if (!roomCode) {
+        return;
+      }
 
-    if (!textToHumanize || isHumanizing) {
-      return;
-    }
+      const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
 
-    setError("");
-    setIsHumanizing(true);
+      if (!imageFiles.length) {
+        return;
+      }
 
-    try {
-      const response = await fetch("/api/humanize", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
+      setError("");
+
+      for (const file of imageFiles) {
+        if (file.size > MAX_IMAGE_BYTES) {
+          setError("Each photo must be 2 MB or smaller.");
+          continue;
+        }
+
+        const dataUrl = await readFileAsDataUrl(file);
+
+        socket.timeout(REQUEST_TIMEOUT).emit(
+          "image-add",
+          {
+            roomCode,
+            image: {
+              name: file.name,
+              type: file.type,
+              dataUrl
+            }
+          },
+          (requestError, response) => {
+            if (requestError || !response?.ok) {
+              setError(response?.error || "Could not share that photo.");
+              return;
+            }
+
+            setImages(response.images || []);
+          }
+        );
+      }
+    },
+    [roomCode]
+  );
+
+  const removeImage = useCallback(
+    (imageId) => {
+      if (!roomCode) {
+        return;
+      }
+
+      socket.timeout(REQUEST_TIMEOUT).emit(
+        "image-remove",
+        {
+          roomCode,
+          imageId
         },
-        body: JSON.stringify({
-          text: note
-        })
-      });
-      const result = await response.json().catch(() => null);
+        (requestError, response) => {
+          if (requestError || !response?.ok) {
+            setError(response?.error || "Could not remove that photo.");
+            return;
+          }
 
-      if (!response.ok || !result?.ok) {
-        throw new Error(result?.error || "Humanize failed.");
-      }
-
-      if (result.text && result.text !== note) {
-        updateNote(result.text);
-      }
-    } catch (requestError) {
-      const fallbackText = humanizeText(note);
-
-      if (fallbackText && fallbackText !== note) {
-        updateNote(fallbackText);
-        setError("Gemini humanizer was unavailable, so LinkPad used a basic local rewrite.");
-      } else {
-        setError(requestError.message || "Could not humanize that text right now.");
-      }
-    } finally {
-      setIsHumanizing(false);
-    }
-  }, [isHumanizing, note, updateNote]);
+          setImages(response.images || []);
+        }
+      );
+    },
+    [roomCode]
+  );
 
   const leaveRoom = useCallback(() => {
     window.location.reload();
@@ -259,26 +300,26 @@ export default function App() {
     () => ({
       roomCode,
       note,
+      images,
       users,
       currentUser,
       typingUsers,
       usersCount,
       connectionStatus,
       error,
-      isBusy,
-      isHumanizing
+      isBusy
     }),
     [
       roomCode,
       note,
+      images,
       users,
       currentUser,
       typingUsers,
       usersCount,
       connectionStatus,
       error,
-      isBusy,
-      isHumanizing
+      isBusy
     ]
   );
 
@@ -287,7 +328,8 @@ export default function App() {
       <EditorPage
         state={appState}
         onNoteChange={updateNote}
-        onHumanizeNote={humanizeNote}
+        onImagesAdd={addImages}
+        onImageRemove={removeImage}
         onLeaveRoom={leaveRoom}
       />
     );
@@ -300,4 +342,13 @@ export default function App() {
       onJoinSession={joinSession}
     />
   );
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
 }
