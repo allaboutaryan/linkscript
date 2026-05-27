@@ -1,0 +1,19 @@
+{
+  "name": "LinkPad",
+  "short_name": "LinkPad",
+  "description": "Realtime collaborative notes for local networks and lightweight remote sessions.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+
