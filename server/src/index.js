@@ -416,11 +416,16 @@ async function humanizeWithGemini(text) {
             parts: [
               {
                 text: [
-                  "Rewrite the following text so it sounds natural, human, and conversational.",
-                  "Keep the original meaning, facts, names, numbers, and intent unchanged.",
-                  "Do not add new claims. Do not remove important details.",
-                  "Vary sentence rhythm, reduce robotic phrasing, and use plain language.",
-                  "Return only the rewritten text, with no headings, notes, markdown, or explanation.",
+                  "Rewrite the text below so it reads like a real person wrote it, while keeping the exact meaning.",
+                  "Keep every fact, name, number, example, and intent unchanged.",
+                  "Do not add new information. Do not remove important details.",
+                  "Do not make it sound over-polished, generic, motivational, or like a formal essay.",
+                  "Keep a natural human rhythm: some short sentences, some normal sentences, and simple wording.",
+                  "Avoid common AI-style transitions and filler phrases such as 'moreover', 'furthermore', 'in conclusion', 'it is important to note', 'delve', 'leverage', 'robust', 'seamless', and 'unlock'.",
+                  "Preserve the writer's original tone as much as possible. If the text is casual, keep it casual. If it is professional, keep it professional but still natural.",
+                  "Use contractions where they fit, but do not force them into every sentence.",
+                  "Do not use headings, bullet points, markdown, notes, or explanations unless they already exist in the original text.",
+                  "Return only the rewritten text.",
                   "",
                   text
                 ].join("\n")
@@ -429,8 +434,8 @@ async function humanizeWithGemini(text) {
           }
         ],
         generationConfig: {
-          temperature: 0.75,
-          topP: 0.9,
+          temperature: 0.55,
+          topP: 0.82,
           maxOutputTokens: 4096
         }
       })
