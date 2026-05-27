@@ -8,9 +8,14 @@ import { Server } from "socket.io";
 
 const PORT = process.env.PORT || 4000;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 const ROOM_CODE_LENGTH = 4;
 const ROOM_CHARACTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const EMPTY_ROOM_TTL_MS = 1000 * 60 * 60;
+const HUMANIZE_MAX_CHARS = 12000;
+const HUMANIZE_WINDOW_MS = 1000 * 60;
+const HUMANIZE_MAX_REQUESTS = 12;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDistPath = path.resolve(__dirname, "../../client/dist");
 const USER_COLORS = [
@@ -34,9 +39,10 @@ const io = new Server(server, {
 });
 
 const rooms = new Map();
+const humanizeRequests = new Map();
 
 app.use(cors({ origin: CLIENT_ORIGIN }));
-app.use(express.json());
+app.use(express.json({ limit: "128kb" }));
 app.use(express.static(clientDistPath));
 
 app.get("/health", (_req, res) => {
@@ -55,6 +61,59 @@ app.get("/api/network", (_req, res) => {
     localUrl: `http://localhost:${PORT}`,
     lanUrls: addresses.map((address) => `http://${address}:${PORT}`)
   });
+});
+
+app.post("/api/humanize", async (req, res) => {
+  const clientKey = req.ip || req.socket.remoteAddress || "unknown";
+
+  if (!canUseHumanizer(clientKey)) {
+    res.status(429).json({
+      ok: false,
+      error: "Too many humanize requests. Wait a minute and try again."
+    });
+    return;
+  }
+
+  const text = String(req.body?.text || "").trim();
+
+  if (!text) {
+    res.status(400).json({
+      ok: false,
+      error: "Add some text before using Humanize."
+    });
+    return;
+  }
+
+  if (text.length > HUMANIZE_MAX_CHARS) {
+    res.status(400).json({
+      ok: false,
+      error: `Humanize supports up to ${HUMANIZE_MAX_CHARS} characters at a time.`
+    });
+    return;
+  }
+
+  if (!GEMINI_API_KEY) {
+    res.status(503).json({
+      ok: false,
+      error: "Gemini API key is not configured on the server."
+    });
+    return;
+  }
+
+  try {
+    const humanizedText = await humanizeWithGemini(text);
+
+    res.json({
+      ok: true,
+      text: humanizedText
+    });
+  } catch (error) {
+    console.error("Humanize failed:", error);
+    res.status(502).json({
+      ok: false,
+      error: "Could not humanize that text right now. Try again in a moment."
+    });
+  }
 });
 
 app.get("*", (_req, res) => {
@@ -320,4 +379,78 @@ function pickRoomColor(room) {
   }
 
   return USER_COLORS[room.users.size % USER_COLORS.length];
+}
+
+function canUseHumanizer(clientKey) {
+  const now = Date.now();
+  const entry = humanizeRequests.get(clientKey);
+
+  if (!entry || now - entry.startedAt > HUMANIZE_WINDOW_MS) {
+    humanizeRequests.set(clientKey, {
+      count: 1,
+      startedAt: now
+    });
+    return true;
+  }
+
+  if (entry.count >= HUMANIZE_MAX_REQUESTS) {
+    return false;
+  }
+
+  entry.count += 1;
+  return true;
+}
+
+async function humanizeWithGemini(text) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: [
+                  "Rewrite the following text so it sounds natural, human, and conversational.",
+                  "Keep the original meaning, facts, names, numbers, and intent unchanged.",
+                  "Do not add new claims. Do not remove important details.",
+                  "Vary sentence rhythm, reduce robotic phrasing, and use plain language.",
+                  "Return only the rewritten text, with no headings, notes, markdown, or explanation.",
+                  "",
+                  text
+                ].join("\n")
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.75,
+          topP: 0.9,
+          maxOutputTokens: 4096
+        }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  const output = data?.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text || "")
+    .join("")
+    .trim();
+
+  if (!output) {
+    throw new Error("Gemini returned an empty response.");
+  }
+
+  return output;
 }
