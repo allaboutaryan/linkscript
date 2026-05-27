@@ -13,14 +13,6 @@ const PHRASE_REPLACEMENTS = [
   [/\bas an AI language model,?\s*/gi, ""]
 ];
 
-const SOFTENERS = [
-  "In simple terms,",
-  "Put simply,",
-  "A practical way to see it is this:",
-  "The main idea is simple:",
-  "Here is the useful part:"
-];
-
 export function humanizeText(text) {
   const cleanText = String(text || "").trim();
 
@@ -56,12 +48,8 @@ export function humanizeText(text) {
   }
 
   const rewritten = sentences.map((sentence, index) => {
-    if (index === 0 && sentence.length > 80) {
-      return `${SOFTENERS[cleanText.length % SOFTENERS.length]} ${sentence}`;
-    }
-
     if (index > 0 && index % 3 === 0 && !/^(also|but|so|and)\b/i.test(sentence)) {
-      return `Also, ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`;
+      return sentence;
     }
 
     return sentence;
