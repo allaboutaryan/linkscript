@@ -1,0 +1,9 @@
+client/dist/
+client/node_modules/
+client/*.log
+server/node_modules/
+server/*.log
+linkpad/
+release/
+dist/
+node_modules/
