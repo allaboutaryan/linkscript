@@ -1,0 +1,40 @@
+{
+  "name": "linkpad",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first realtime collaborative notes with room codes, participant dots, and typing indicators.",
+  "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix client",
+    "build": "npm run build --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client -- --host 0.0.0.0",
+    "desktop": "npm run build && electron .",
+    "desktop:dist": "npm run build && electron-builder --win nsis",
+    "start": "npm start --prefix server",
+    "render-build": "npm run install:all && npm run build"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.linkpad.local",
+    "productName": "LinkPad",
+    "files": [
+      "electron/**/*",
+      "server/**/*",
+      "client/dist/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "signAndEditExecutable": false
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1"
+  }
+}
