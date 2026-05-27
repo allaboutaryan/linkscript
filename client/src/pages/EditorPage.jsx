@@ -4,14 +4,32 @@ import ParticipantDots from "../components/ParticipantDots.jsx";
 import StatusPill from "../components/StatusPill.jsx";
 import TypingIndicator from "../components/TypingIndicator.jsx";
 
-export default function EditorPage({ state, onNoteChange, onHumanizeNote, onLeaveRoom }) {
+export default function EditorPage({ state, onNoteChange, onImagesAdd, onImageRemove, onLeaveRoom }) {
   const [copied, setCopied] = useState(false);
-  const canHumanize = state.note.trim().length > 0 && !state.isHumanizing;
 
   async function copyRoomCode() {
     await navigator.clipboard.writeText(state.roomCode);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1400);
+  }
+
+  function handlePaste(event) {
+    const files = Array.from(event.clipboardData?.files || []);
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+
+    if (imageFiles.length) {
+      event.preventDefault();
+      onImagesAdd(imageFiles);
+    }
+  }
+
+  function handleDragOver(event) {
+    event.preventDefault();
+  }
+
+  function handleDrop(event) {
+    event.preventDefault();
+    onImagesAdd(event.dataTransfer?.files || []);
   }
 
   return (
@@ -43,14 +61,6 @@ export default function EditorPage({ state, onNoteChange, onHumanizeNote, onLeav
             </button>
             <button
               type="button"
-              onClick={onHumanizeNote}
-              disabled={!canHumanize}
-              className="rounded-md border border-cyan-300/40 bg-cyan-300/10 px-3 py-2 text-sm font-medium text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-300/15 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {state.isHumanizing ? "Humanizing..." : "Humanize"}
-            </button>
-            <button
-              type="button"
               onClick={onLeaveRoom}
               className="rounded-md border border-zinc-800 px-3 py-2 text-sm font-medium text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-100"
             >
@@ -62,11 +72,47 @@ export default function EditorPage({ state, onNoteChange, onHumanizeNote, onLeav
         <div className="flex min-h-0 flex-1 flex-col py-4">
           <InvitePanel roomCode={state.roomCode} />
           <TypingIndicator users={state.typingUsers} />
+          <div
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            className="mb-3 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/50 p-3 text-sm text-zinc-400 transition hover:border-cyan-300/60"
+          >
+            Paste or drag photos here to share them with the room.
+          </div>
+          {state.images.length ? (
+            <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {state.images.map((image) => (
+                <figure
+                  key={image.id}
+                  className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900"
+                >
+                  <img
+                    src={image.dataUrl}
+                    alt={image.name}
+                    className="h-44 w-full object-cover"
+                  />
+                  <figcaption className="flex items-center justify-between gap-3 p-3 text-sm text-zinc-300">
+                    <span className="truncate" title={image.name}>
+                      {image.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onImageRemove(image.id)}
+                      className="shrink-0 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 transition hover:border-red-300 hover:text-red-100"
+                    >
+                      Remove
+                    </button>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          ) : null}
           <textarea
             value={state.note}
             onChange={(event) => onNoteChange(event.target.value)}
+            onPaste={handlePaste}
             spellCheck="true"
-            placeholder="Start typing. Everyone in this room will see updates live..."
+            placeholder="Start typing, paste a photo, or drag images above. Everyone in this room will see updates live..."
             className="min-h-[70vh] flex-1 resize-none rounded-lg border border-zinc-800 bg-zinc-900/80 p-5 text-base leading-7 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-cyan-300 sm:text-lg"
           />
         </div>
