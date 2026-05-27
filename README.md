@@ -83,6 +83,22 @@ Install dependencies:
 npm run install:all
 ```
 
+## Gemini Humanizer Setup
+
+The **Humanize** button can use Gemini to rewrite pasted text in a more natural style while keeping the original meaning. Add this environment variable on Render or in your local shell:
+
+```text
+GEMINI_API_KEY=your_gemini_api_key
+```
+
+Optional model override:
+
+```text
+GEMINI_MODEL=gemini-2.0-flash
+```
+
+If `GEMINI_API_KEY` is missing or Gemini is temporarily unavailable, LinkPad falls back to a basic local rewrite so the button still responds.
+
 ## Run Locally From One URL
 
 Build the React client:
