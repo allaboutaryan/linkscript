@@ -19,6 +19,7 @@ export default function App() {
   const [connectionStatus, setConnectionStatus] = useState(INITIAL_STATUS);
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
+  const [isHumanizing, setIsHumanizing] = useState(false);
   const latestRoomCode = useRef("");
   const currentUserRef = useRef(null);
   const displayNameRef = useRef("");
@@ -207,15 +208,48 @@ export default function App() {
     [roomCode]
   );
 
-  const humanizeNote = useCallback(() => {
-    const humanizedNote = humanizeText(note);
+  const humanizeNote = useCallback(async () => {
+    const textToHumanize = note.trim();
 
-    if (!humanizedNote || humanizedNote === note) {
+    if (!textToHumanize || isHumanizing) {
       return;
     }
 
-    updateNote(humanizedNote);
-  }, [note, updateNote]);
+    setError("");
+    setIsHumanizing(true);
+
+    try {
+      const response = await fetch("/api/humanize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          text: note
+        })
+      });
+      const result = await response.json().catch(() => null);
+
+      if (!response.ok || !result?.ok) {
+        throw new Error(result?.error || "Humanize failed.");
+      }
+
+      if (result.text && result.text !== note) {
+        updateNote(result.text);
+      }
+    } catch (requestError) {
+      const fallbackText = humanizeText(note);
+
+      if (fallbackText && fallbackText !== note) {
+        updateNote(fallbackText);
+        setError("Gemini humanizer was unavailable, so LinkPad used a basic local rewrite.");
+      } else {
+        setError(requestError.message || "Could not humanize that text right now.");
+      }
+    } finally {
+      setIsHumanizing(false);
+    }
+  }, [isHumanizing, note, updateNote]);
 
   const leaveRoom = useCallback(() => {
     window.location.reload();
@@ -231,9 +265,21 @@ export default function App() {
       usersCount,
       connectionStatus,
       error,
-      isBusy
+      isBusy,
+      isHumanizing
     }),
-    [roomCode, note, users, currentUser, typingUsers, usersCount, connectionStatus, error, isBusy]
+    [
+      roomCode,
+      note,
+      users,
+      currentUser,
+      typingUsers,
+      usersCount,
+      connectionStatus,
+      error,
+      isBusy,
+      isHumanizing
+    ]
   );
 
   if (view === "editor") {
